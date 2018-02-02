@@ -169,7 +169,7 @@ bool allArgumentsAreConstants(const Block & block, const ColumnNumbers & args)
     return true;
 }
 
-bool ExecutableImpl::defaultImplementationForConstantArguments(Block & block, const ColumnNumbers & args, size_t result) const
+bool PreparedFunctionImpl::defaultImplementationForConstantArguments(Block & block, const ColumnNumbers & args, size_t result) const
 {
     if (args.empty() || !useDefaultImplementationForConstants() || !allArgumentsAreConstants(block, args))
         return false;
@@ -213,7 +213,7 @@ bool ExecutableImpl::defaultImplementationForConstantArguments(Block & block, co
 }
 
 
-bool ExecutableImpl::defaultImplementationForNulls(Block & block, const ColumnNumbers & args, size_t result) const
+bool PreparedFunctionImpl::defaultImplementationForNulls(Block & block, const ColumnNumbers & args, size_t result) const
 {
     if (args.empty() || !useDefaultImplementationForNulls())
         return false;
@@ -239,7 +239,7 @@ bool ExecutableImpl::defaultImplementationForNulls(Block & block, const ColumnNu
 
 }
 
-void ExecutableImpl::execute(Block & block, const ColumnNumbers & args, size_t result) const
+void PreparedFunctionImpl::execute(Block & block, const ColumnNumbers & args, size_t result) const
 {
     if (defaultImplementationForConstantArguments(block, args, result))
         return;
@@ -263,7 +263,7 @@ void FunctionBuilderImpl::checkNumberOfArguments(size_t number_of_arguments) con
                         ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 }
 
-MyFunctionPtr FunctionBuilderImpl::build(const DataTypes & arguments) const
+FunctionBasePtr FunctionBuilderImpl::build(const DataTypes & arguments) const
 {
     checkNumberOfArguments(arguments.size());
 

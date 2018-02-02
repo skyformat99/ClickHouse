@@ -19,13 +19,10 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
 }
 
-struct ExpressionAction;
-
-
-class IExecutable
+class IPreparedFunction
 {
 public:
-    virtual ~IExecutable() = default;
+    virtual ~IPreparedFunction() = default;
 
     /// Get the main function name.
     virtual String getName() const = 0;
@@ -33,9 +30,9 @@ public:
     virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result) const = 0;
 };
 
-using ExecutablePtr = std::shared_ptr<IExecutable>;
+using PreparedFunctionPtr = std::shared_ptr<IPreparedFunction>;
 
-class ExecutableImpl : public IExecutable
+class PreparedFunctionImpl : public IPreparedFunction
 {
 public:
     void execute(Block & block, const ColumnNumbers & arguments, size_t result) const final;
@@ -68,23 +65,20 @@ private:
 };
 
 
-class IMyFunction
+class IFunctionBase
 {
 public:
-    virtual ~IMyFunction() = default;
+    virtual ~IFunctionBase() = default;
 
     /// Get the main function name.
     virtual String getName() const = 0;
 
-    /// Returns exact number of arguments expected by execute.
-    virtual size_t getNumberOfArguments() const = 0;
-
-    virtual const DataTypes & getArgumentTypes() const= 0;
-    virtual DataTypePtr getReturnType() const = 0;
+    virtual const DataTypes & getArgumentTypes() const = 0;
+    virtual const DataTypePtr & getReturnType() const = 0;
 
     /// Do preparations and return executable.
     /// sample_block should contain data types of arguments and values of constants, if relevant.
-    virtual ExecutablePtr prepare(const Block & sample_block) const = 0;
+    virtual PreparedFunctionPtr prepare(const Block & sample_block) const = 0;
 
     virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result) const
     {
@@ -143,7 +137,7 @@ public:
         bool is_positive = true;    /// true if the function is nondecreasing, false, if notincreasing. If is_monotonic = false, then it does not matter.
         bool is_always_monotonic = false; /// Is true if function is monotonic on the whole input range I
 
-        Monotonicity(bool is_monotonic_ = false, bool is_positive_ = true, bool is_always_monotonic_ = false)
+        explicit Monotonicity(bool is_monotonic_ = false, bool is_positive_ = true, bool is_always_monotonic_ = false)
                 : is_monotonic(is_monotonic_), is_positive(is_positive_), is_always_monotonic(is_always_monotonic_) {}
     };
 
@@ -156,7 +150,7 @@ public:
     }
 };
 
-using MyFunctionPtr = std::shared_ptr<IMyFunction>;
+using FunctionBasePtr = std::shared_ptr<IFunctionBase>;
 
 class IFunctionBuilder
 {
@@ -176,7 +170,7 @@ public:
     virtual void checkNumberOfArguments(size_t number_of_arguments) const = 0;
 
     /// Check arguments types and return IFunction.
-    virtual MyFunctionPtr build(const DataTypes & arguments) const = 0;
+    virtual FunctionBasePtr build(const DataTypes & arguments) const = 0;
 };
 
 using FunctionBuilderPtr = std::shared_ptr<IFunctionBuilder>;
@@ -184,7 +178,7 @@ using FunctionBuilderPtr = std::shared_ptr<IFunctionBuilder>;
 class FunctionBuilderImpl : public IFunctionBuilder
 {
 public:
-    MyFunctionPtr build(const DataTypes & arguments) const final;
+    FunctionBasePtr build(const DataTypes & arguments) const final;
 
     /// Default implementation. Will check only in non-variadic case.
     void checkNumberOfArguments(size_t number_of_arguments) const override;
@@ -203,52 +197,117 @@ protected:
       */
     virtual bool useDefaultImplementationForNulls() const { return true; }
 
-    virtual MyFunctionPtr buildImpl(const DataTypes & arguments, const DataTypePtr & return_type) const = 0;
+    virtual FunctionBasePtr buildImpl(const DataTypes & arguments, const DataTypePtr & return_type) const = 0;
 };
 
 
 class IFunction : public std::enable_shared_from_this<IFunction>,
-                  public FunctionBuilderImpl, public IMyFunction, public ExecutableImpl
+                  public FunctionBuilderImpl, public IFunctionBase, public PreparedFunctionImpl
 {
 public:
-    /** The successor of IFunction must implement:
-      * - getName
-      * - getNumberOfArguments
-      * - getReturnTypeImpl
-      * - executeImpl
-      */
-
     String getName() const override = 0;
+    const DataTypePtr & getReturnType() const override = 0;
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override = 0;
 
-    ExecutablePtr prepare(const Block & sample_block) const final { return shared_from_this(); }
+    /// Override this functions to change default implementation behavior. See details in IMyFunction.
+    bool useDefaultImplementationForNulls() const override { return true; }
+    bool useDefaultImplementationForConstants() const override { return false; }
+    ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {}; }
+
+    PreparedFunctionPtr prepare(const Block & sample_block) const final
+    {
+        throw Exception("prepare is not implemented for IFunction", ErrorCodes::NOT_IMPLEMENTED);
+    }
 
     const DataTypes & getArgumentTypes() const final
     {
-        if (!return_type)
-            throw Exception("Function" + getName() + " is not built.", ErrorCodes::LOGICAL_ERROR);
-
-        return arguments;
-    }
-
-    DataTypePtr getReturnType() const final
-    {
-        if (!return_type)
-            throw Exception("Function" + getName() + " is not built.", ErrorCodes::LOGICAL_ERROR);
-
-        return return_type;
+        throw Exception("getArgumentTypes is not implemented for IFunction", ErrorCodes::NOT_IMPLEMENTED);
     }
 
 protected:
-    MyFunctionPtr buildImpl(const DataTypes & arguments_, const DataTypePtr & return_type_) const final
+    FunctionBasePtr buildImpl(const DataTypes & arguments_, const DataTypePtr & return_type_) const final
     {
-        arguments = arguments;
-        return_type = return_type;
-        return shared_from_this();
+        throw Exception("buildImpl is not implemented for IFunction", ErrorCodes::NOT_IMPLEMENTED);
+    }
+};
+
+class DefaultExecutable final : public PreparedFunctionImpl
+{
+public:
+    explicit DefaultExecutable(std::shared_ptr<IFunction> function) : function(std::move(function)) {}
+
+protected:
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const final
+    {
+        return function->executeImpl(block, arguments, result);
+    }
+    bool useDefaultImplementationForNulls() const final { return function->useDefaultImplementationForNulls(); }
+    bool useDefaultImplementationForConstants() const final { return function->useDefaultImplementationForConstants(); }
+    ColumnNumbers getArgumentsThatAreAlwaysConstant() const final { return function->getArgumentsThatAreAlwaysConstant(); }
+
+private:
+    std::shared_ptr<IFunction> function;
+};
+
+class DefaultFunction final : public IFunctionBase
+{
+public:
+    DefaultFunction(std::shared_ptr<IFunction> function, DataTypes && arguments, DataTypePtr && return_type)
+            : function(std::move(function)), arguments(std::move(arguments)), return_type(std::move(return_type)) {}
+
+    String getName() const override { return function->getName(); }
+
+    const DataTypes & getArgumentTypes() const override { return arguments; }
+    const DataTypePtr & getReturnType() const override { return return_type; }
+
+    PreparedFunctionPtr prepare(const Block & sample_block) const override { return std::make_shared<DefaultExecutable>(function); }
+
+    bool isSuitableForConstantFolding() const override { return function->isSuitableForConstantFolding(); }
+
+    bool isInjective(const Block & sample_block) override { return function->isInjective(sample_block); }
+
+    bool isDeterministicInScopeOfQuery() override { return function->isDeterministicInScopeOfQuery(); }
+
+    bool hasInformationAboutMonotonicity() const override { return function->hasInformationAboutMonotonicity(); }
+
+    IFunctionBase::Monotonicity getMonotonicityForRange(const IDataType & type, const Field & left, const Field & right) const override
+    {
+        return function->getMonotonicityForRange(type, left, right);
     }
 
 private:
+    std::shared_ptr<IFunction> function;
     DataTypes arguments;
     DataTypePtr return_type;
+};
+
+class DefaultFunctionBuilder : public FunctionBuilderImpl
+{
+public:
+    explicit DefaultFunctionBuilder(std::shared_ptr<IFunction> function) : function(std::move(function)) {}
+
+    void checkNumberOfArguments(size_t number_of_arguments) const override
+    {
+        return function->checkNumberOfArguments(number_of_arguments);
+    }
+
+    String getName() const override { return function->getName(); };
+    bool isVariadic() const override { return function->isVariadic(); }
+    size_t getNumberOfArguments() const override { return function->getNumberOfArguments(); }
+
+protected:
+    /// Get the result type by argument type. If the function does not apply to these arguments, throw an exception.
+    DataTypePtr getReturnType(const DataTypes & arguments) const override { return function->getReturnType(); }
+
+    bool useDefaultImplementationForNulls() const override { return function->useDefaultImplementationForNulls(); }
+
+    FunctionBasePtr buildImpl(const DataTypes & arguments, const DataTypePtr & return_type) const override
+    {
+        return std::make_shared<DefaultFunction>(function, arguments, return_type);
+    }
+
+private:
+    std::shared_ptr<IFunction> function;
 };
 
 
@@ -434,9 +493,5 @@ private:
 //
 //    virtual ~IFunction() {}
 //};
-
-
-using FunctionPtr = std::shared_ptr<IFunction>;
-
 
 }
