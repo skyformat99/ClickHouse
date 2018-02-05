@@ -4,6 +4,7 @@
 #include <Storages/MergeTree/MergeTreeBlockOutputStream.h>
 #include <Storages/MergeTree/DiskSpaceMonitor.h>
 #include <Storages/MergeTree/MergeList.h>
+#include <Storages/MergeTree/MergeTreeMutation.h>
 #include <Databases/IDatabase.h>
 #include <Common/escapeForFileName.h>
 #include <Common/typeid_cast.h>
@@ -80,7 +81,7 @@ StorageMergeTree::StorageMergeTree(
     ///  and don't allow to reinitialize them, so delete each of them immediately
     data.clearOldTemporaryDirectories(0);
 
-    increment.set(data.getMaxDataPartIndex());
+    increment.set(data.getMaxDataPartVersion());
 }
 
 
@@ -246,12 +247,11 @@ void StorageMergeTree::alter(
 }
 
 
-void StorageMergeTree::mutate(const MutationCommands & commands, const Context & /*context*/)
+void StorageMergeTree::mutate(const MutationCommands & commands, const Context & context)
 {
-    for (const auto & cmd : commands.commands)
-    {
-        LOG_TRACE(log, "MUTATION type: " << cmd.type << " predicate: " << cmd.predicate);
-    }
+    UInt32 version = increment.get();
+    MergeTreeMutation mutation(data, version, commands.commands);
+    mutation.execute(context);
 }
 
 

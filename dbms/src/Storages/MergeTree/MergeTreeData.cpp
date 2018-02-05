@@ -361,15 +361,15 @@ String MergeTreeData::MergingParams::getModeName() const
 }
 
 
-Int64 MergeTreeData::getMaxDataPartIndex()
+Int64 MergeTreeData::getMaxDataPartVersion()
 {
     std::lock_guard<std::mutex> lock_all(data_parts_mutex);
 
-    Int64 max_block_id = 0;
+    Int64 max_version = 0;
     for (const DataPartPtr & part : data_parts_by_name)
-        max_block_id = std::max(max_block_id, part->info.max_block);
+        max_version = std::max(max_version, part->info.version);
 
-    return max_block_id;
+    return max_version;
 }
 
 
@@ -1416,7 +1416,20 @@ void MergeTreeData::removePreCommittedPart(const DataPartPtr & precommitted_part
 bool MergeTreeData::commitPart(const DataPartPtr & precommitted_part)
 {
     std::lock_guard<std::mutex> lock(data_parts_mutex);
+    return commitPartImpl(precommitted_part, lock);
+}
 
+
+void MergeTreeData::commitParts(const DataPartsVector & precommitted_parts)
+{
+    std::lock_guard<std::mutex> lock(data_parts_mutex);
+    for (const auto & part : precommitted_parts)
+        commitPartImpl(part, lock); /// TODO: what to do with the return value?
+}
+
+
+bool MergeTreeData::commitPartImpl(const DataPartPtr & precommitted_part, std::lock_guard<std::mutex> & /* data_parts_lock */)
+{
     precommitted_part->assertState({DataPartState::PreCommitted});
 
     auto part_it = data_parts_by_name.find(precommitted_part->info);

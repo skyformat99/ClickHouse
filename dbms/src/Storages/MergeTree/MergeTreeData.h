@@ -305,7 +305,7 @@ public:
 
     bool mayBenefitFromIndexForIn(const ASTPtr & left_in_operand) const;
 
-    Int64 getMaxDataPartIndex();
+    Int64 getMaxDataPartVersion();
 
     const NamesAndTypesList & getColumnsListImpl() const override { return columns; }
 
@@ -371,6 +371,8 @@ public:
     void removePreCommittedPart(const DataPartPtr & precommitted_part);
     /// Returns true if the part is not obsolete.
     bool commitPart(const DataPartPtr & precommitted_part);
+
+    void commitParts(const DataPartsVector & precommitted_parts);
 
     /// Renames temporary part to a permanent part and adds it to the working set.
     /// If increment != nullptr, part index is determing using increment. Otherwise part index remains unchanged.
@@ -660,6 +662,9 @@ private:
     /// If part == nullptr, just checks that all type conversions are possible.
     void createConvertExpression(const DataPartPtr & part, const NamesAndTypesList & old_columns, const NamesAndTypesList & new_columns,
         ExpressionActionsPtr & out_expression, NameToNameMap & out_rename_map, bool & out_force_update_metadata) const;
+
+    /// Modify part state to Committed and make contained parts Obsolete.
+    bool commitPartImpl(const DataPartPtr & precommitted_part, std::lock_guard<std::mutex> & data_parts_lock);
 
     /// Calculates column sizes in compressed form for the current state of data_parts. Call with data_parts mutex locked.
     void calculateColumnSizesImpl();
