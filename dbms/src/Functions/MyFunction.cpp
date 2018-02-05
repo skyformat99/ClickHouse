@@ -169,7 +169,7 @@ bool allArgumentsAreConstants(const Block & block, const ColumnNumbers & args)
     return true;
 }
 
-bool PreparedFunctionImpl::defaultImplementationForConstantArguments(Block & block, const ColumnNumbers & args, size_t result) const
+bool PreparedFunctionImpl::defaultImplementationForConstantArguments(Block & block, const ColumnNumbers & args, size_t result)
 {
     if (args.empty() || !useDefaultImplementationForConstants() || !allArgumentsAreConstants(block, args))
         return false;
@@ -213,7 +213,7 @@ bool PreparedFunctionImpl::defaultImplementationForConstantArguments(Block & blo
 }
 
 
-bool PreparedFunctionImpl::defaultImplementationForNulls(Block & block, const ColumnNumbers & args, size_t result) const
+bool PreparedFunctionImpl::defaultImplementationForNulls(Block & block, const ColumnNumbers & args, size_t result)
 {
     if (args.empty() || !useDefaultImplementationForNulls())
         return false;
@@ -239,7 +239,7 @@ bool PreparedFunctionImpl::defaultImplementationForNulls(Block & block, const Co
 
 }
 
-void PreparedFunctionImpl::execute(Block & block, const ColumnNumbers & args, size_t result) const
+void PreparedFunctionImpl::execute(Block & block, const ColumnNumbers & args, size_t result)
 {
     if (defaultImplementationForConstantArguments(block, args, result))
         return;
@@ -263,24 +263,27 @@ void FunctionBuilderImpl::checkNumberOfArguments(size_t number_of_arguments) con
                         ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 }
 
-FunctionBasePtr FunctionBuilderImpl::build(const DataTypes & arguments) const
+DataTypePtr FunctionBuilderImpl::getReturnType(const ColumnsWithTypeAndName & arguments) const
 {
     checkNumberOfArguments(arguments.size());
 
     if (!arguments.empty() && useDefaultImplementationForNulls())
     {
-        NullPresence null_presence = getNullPresence(arguments);
-        if (null_presence.has_null_constant)
+        NullPresence null_presense = getNullPresense(arguments);
+
+        if (null_presense.has_null_constant)
         {
-            return buildImpl(arguments, makeNullable(std::make_shared<DataTypeNothing>()));
+            return makeNullable(std::make_shared<DataTypeNothing>());
         }
-        if (null_presence.has_nullable)
+        if (null_presense.has_nullable)
         {
-            return buildImpl(arguments, makeNullable(getReturnType(toNestedDataTypes(arguments)));
+            Block nested_block = createBlockWithNestedColumns(Block(arguments), ext::collection_cast<ColumnNumbers>(ext::range(0, arguments.size())));
+            auto return_type = getReturnTypeImpl(ColumnsWithTypeAndName(nested_block.begin(), nested_block.end()));
+            return makeNullable(return_type);
+
         }
     }
 
-    return buildImpl(arguments, getReturnType(arguments));
+    return getReturnTypeImpl(arguments);
 }
-
 }

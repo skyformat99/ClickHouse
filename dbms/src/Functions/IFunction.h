@@ -27,7 +27,7 @@ public:
     /// Get the main function name.
     virtual String getName() const = 0;
 
-    virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result) const = 0;
+    virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result) = 0;
 };
 
 using PreparedFunctionPtr = std::shared_ptr<IPreparedFunction>;
@@ -35,10 +35,10 @@ using PreparedFunctionPtr = std::shared_ptr<IPreparedFunction>;
 class PreparedFunctionImpl : public IPreparedFunction
 {
 public:
-    void execute(Block & block, const ColumnNumbers & arguments, size_t result) const final;
+    void execute(Block & block, const ColumnNumbers & arguments, size_t result) final;
 
 protected:
-    virtual void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const = 0;
+    virtual void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) = 0;
 
     /** Default implementation in presence of Nullable arguments or NULL constants as arguments is the following:
       *  if some of arguments are NULL constants then return NULL constant,
@@ -60,8 +60,8 @@ protected:
     virtual ColumnNumbers getArgumentsThatAreAlwaysConstant() const { return {}; }
 
 private:
-    bool defaultImplementationForNulls(Block & block, const ColumnNumbers & args, size_t result) const;
-    bool defaultImplementationForConstantArguments(Block & block, const ColumnNumbers & args, size_t result) const;
+    bool defaultImplementationForNulls(Block & block, const ColumnNumbers & args, size_t result);
+    bool defaultImplementationForConstantArguments(Block & block, const ColumnNumbers & args, size_t result);
 };
 
 
@@ -80,7 +80,8 @@ public:
     /// sample_block should contain data types of arguments and values of constants, if relevant.
     virtual PreparedFunctionPtr prepare(const Block & sample_block) const = 0;
 
-    virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result) const
+    /// TODO: make const
+    virtual void execute(Block & block, const ColumnNumbers & arguments, size_t result)
     {
         return prepare(block)->execute(block, arguments, result);
     }
@@ -169,8 +170,8 @@ public:
     /// Throw if number of arguments is incorrect. Default implementation will check only in non-variadic case.
     virtual void checkNumberOfArguments(size_t number_of_arguments) const = 0;
 
-    /// Check arguments types and return IFunction.
-    virtual FunctionBasePtr build(const DataTypes & arguments) const = 0;
+    /// Check arguments and return IFunction.
+    virtual FunctionBasePtr build(const ColumnsWithTypeAndName & arguments) const = 0;
 };
 
 using FunctionBuilderPtr = std::shared_ptr<IFunctionBuilder>;
@@ -178,14 +179,31 @@ using FunctionBuilderPtr = std::shared_ptr<IFunctionBuilder>;
 class FunctionBuilderImpl : public IFunctionBuilder
 {
 public:
-    FunctionBasePtr build(const DataTypes & arguments) const final;
+    FunctionBasePtr build(const ColumnsWithTypeAndName & arguments) const final
+    {
+        return buildImpl(arguments, getReturnType(arguments));
+    }
 
     /// Default implementation. Will check only in non-variadic case.
     void checkNumberOfArguments(size_t number_of_arguments) const override;
 
+    DataTypePtr getReturnType(const ColumnsWithTypeAndName & arguments) const;
+
 protected:
     /// Get the result type by argument type. If the function does not apply to these arguments, throw an exception.
-    virtual DataTypePtr getReturnType(const DataTypes & arguments) const = 0;
+    virtual DataTypePtr getReturnTypeImpl(const ColumnsWithTypeAndName & arguments) const
+    {
+        DataTypes data_types(arguments.size());
+        for (size_t i = 0; i < arguments.size(); ++i)
+            data_types[i] = arguments[i].type;
+
+        return getReturnTypeImpl(data_types);
+    }
+
+    virtual DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const
+    {
+        throw Exception("getReturnType is not implemented for " + getName(), ErrorCodes::NOT_IMPLEMENTED);
+    }
 
     /** If useDefaultImplementationForNulls() is true, than change arguments for getReturnType() and buildImpl():
       *  if some of arguments are Nullable(Nothing) then don't call getReturnType(), call buildImpl() with return_type = Nullable(Nothing),
@@ -197,7 +215,7 @@ protected:
       */
     virtual bool useDefaultImplementationForNulls() const { return true; }
 
-    virtual FunctionBasePtr buildImpl(const DataTypes & arguments, const DataTypePtr & return_type) const = 0;
+    virtual FunctionBasePtr buildImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & return_type) const = 0;
 };
 
 
@@ -206,13 +224,18 @@ class IFunction : public std::enable_shared_from_this<IFunction>,
 {
 public:
     String getName() const override = 0;
-    const DataTypePtr & getReturnType() const override = 0;
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override = 0;
+    /// TODO: make const
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override = 0;
 
     /// Override this functions to change default implementation behavior. See details in IMyFunction.
     bool useDefaultImplementationForNulls() const override { return true; }
     bool useDefaultImplementationForConstants() const override { return false; }
     ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {}; }
+
+    void execute(Block & block, const ColumnNumbers & arguments, size_t result) final
+    {
+        return PreparedFunctionImpl::execute(block, arguments, result);
+    }
 
     PreparedFunctionPtr prepare(const Block & sample_block) const final
     {
@@ -225,7 +248,7 @@ public:
     }
 
 protected:
-    FunctionBasePtr buildImpl(const DataTypes & arguments_, const DataTypePtr & return_type_) const final
+    FunctionBasePtr buildImpl(const ColumnsWithTypeAndName & arguments_, const DataTypePtr & return_type_) const final
     {
         throw Exception("buildImpl is not implemented for IFunction", ErrorCodes::NOT_IMPLEMENTED);
     }
@@ -237,7 +260,7 @@ public:
     explicit DefaultExecutable(std::shared_ptr<IFunction> function) : function(std::move(function)) {}
 
 protected:
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const final
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) final
     {
         return function->executeImpl(block, arguments, result);
     }
@@ -274,7 +297,6 @@ public:
     {
         return function->getMonotonicityForRange(type, left, right);
     }
-
 private:
     std::shared_ptr<IFunction> function;
     DataTypes arguments;
@@ -297,20 +319,24 @@ public:
 
 protected:
     /// Get the result type by argument type. If the function does not apply to these arguments, throw an exception.
-    DataTypePtr getReturnType(const DataTypes & arguments) const override { return function->getReturnType(); }
+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override { return function->getReturnTypeImpl(arguments); }
+    DataTypePtr getReturnTypeImpl(const ColumnsWithTypeAndName & arguments) const override { return function->getReturnTypeImpl(arguments); }
 
     bool useDefaultImplementationForNulls() const override { return function->useDefaultImplementationForNulls(); }
 
-    FunctionBasePtr buildImpl(const DataTypes & arguments, const DataTypePtr & return_type) const override
+    FunctionBasePtr buildImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & return_type) const override
     {
-        return std::make_shared<DefaultFunction>(function, arguments, return_type);
+        DataTypes data_types(arguments.size());
+        for (size_t i = 0; i < arguments.size(); ++i)
+            data_types[i] = arguments[i].type;
+        return std::make_shared<DefaultFunction>(function, data_types, return_type);
     }
 
 private:
     std::shared_ptr<IFunction> function;
 };
 
-
+using FunctionPtr = std::shared_ptr<IFunction>;
 
 //
 ///** Interface for normal functions.

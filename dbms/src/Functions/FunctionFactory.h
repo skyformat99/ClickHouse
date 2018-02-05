@@ -41,10 +41,20 @@ public:
         Creator creator,
         CaseSensitiveness case_sensitiveness = CaseSensitive);
 
+
+    template <typename Function>
+    static FunctionBuilderPtr registerDefaultFunction(const Context & context)
+    {
+        return std::make_shared<Function>(Function::create(context));
+    }
+
     template <typename Function>
     void registerFunction()
     {
-        registerFunction(Function::name, &Function::create);
+        if constexpr (std::is_base_of<IFunction, Function>::value)
+            registerFunction(Function::name, &registerDefaultFunction<Function>);
+        else
+            registerFunction(Function::name, &Function::create);
     }
 
     /// Throws an exception if not found.

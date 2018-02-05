@@ -151,15 +151,15 @@ ExpressionActions::Actions ExpressionAction::getPrerequisites(Block & sample_blo
         if (sample_block.has(result_name))
             throw Exception("Column '" + result_name + "' already exists", ErrorCodes::DUPLICATE_COLUMN);
 
-        DataTypes argument_types(argument_names.size());
+        ColumnsWithTypeAndName arguments(argument_names.size());
         for (size_t i = 0; i < argument_names.size(); ++i)
         {
             if (!sample_block.has(argument_names[i]))
                 throw Exception("Unknown identifier: '" + argument_names[i] + "'", ErrorCodes::UNKNOWN_IDENTIFIER);
-            argument_types[i] = sample_block.getByName(argument_names[i]).type;
+            arguments[i] = sample_block.getByName(argument_names[i]);
         }
 
-        function = function_builder->build(argument_types);
+        function = function_builder->build(arguments);
         result_type = function->getReturnType();
     }
 
