@@ -274,6 +274,8 @@ class DefaultExecutable final : public PreparedFunctionImpl
 public:
     explicit DefaultExecutable(std::shared_ptr<IFunction> function) : function(std::move(function)) {}
 
+    String getName() const override { return function->getName() };
+
 protected:
     void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) final
     {
