@@ -211,7 +211,7 @@ protected:
         return getReturnTypeImpl(data_types);
     }
 
-    virtual DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const
+    virtual DataTypePtr getReturnTypeImpl(const DataTypes & /*arguments*/) const
     {
         throw Exception("getReturnType is not implemented for " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
@@ -248,12 +248,10 @@ public:
     bool useDefaultImplementationForConstants() const override { return false; }
     ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {}; }
 
-    void execute(Block & block, const ColumnNumbers & arguments, size_t result) final
-    {
-        return PreparedFunctionImpl::execute(block, arguments, result);
-    }
+    using PreparedFunctionImpl::execute;
+    using FunctionBuilderImpl::getReturnTypeImpl;
 
-    PreparedFunctionPtr prepare(const Block & sample_block) const final
+    PreparedFunctionPtr prepare(const Block & /*sample_block*/) const final
     {
         throw Exception("prepare is not implemented for IFunction", ErrorCodes::NOT_IMPLEMENTED);
     }
@@ -264,7 +262,7 @@ public:
     }
 
 protected:
-    FunctionBasePtr buildImpl(const ColumnsWithTypeAndName & arguments_, const DataTypePtr & return_type_) const final
+    FunctionBasePtr buildImpl(const ColumnsWithTypeAndName & /*arguments*/, const DataTypePtr & /*return_type*/) const final
     {
         throw Exception("buildImpl is not implemented for IFunction", ErrorCodes::NOT_IMPLEMENTED);
     }
@@ -299,7 +297,7 @@ public:
     const DataTypes & getArgumentTypes() const override { return arguments; }
     const DataTypePtr & getReturnType() const override { return return_type; }
 
-    PreparedFunctionPtr prepare(const Block & sample_block) const override { return std::make_shared<DefaultExecutable>(function); }
+    PreparedFunctionPtr prepare(const Block & /*sample_block*/) const override { return std::make_shared<DefaultExecutable>(function); }
 
     bool isSuitableForConstantFolding() const override { return function->isSuitableForConstantFolding(); }
 
