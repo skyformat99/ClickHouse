@@ -172,6 +172,11 @@ public:
 
     /// Check arguments and return IFunction.
     virtual FunctionBasePtr build(const ColumnsWithTypeAndName & arguments) const = 0;
+
+    /// For higher-order functions (functions, that have lambda expression as at least one argument).
+    /// You pass data types with empty DataTypeFunction for lambda arguments.
+    /// This function will replace it with DataTypeFunction containing actual types.
+    virtual void getLambdaArgumentTypes(DataTypes & arguments) const = 0;
 };
 
 using FunctionBuilderPtr = std::shared_ptr<IFunctionBuilder>;
@@ -188,6 +193,12 @@ public:
     void checkNumberOfArguments(size_t number_of_arguments) const override;
 
     DataTypePtr getReturnType(const ColumnsWithTypeAndName & arguments) const;
+
+    void getLambdaArgumentTypes(DataTypes & arguments) const override
+    {
+        checkNumberOfArguments(arguments.size());
+        getLambdaArgumentTypesImpl(arguments);
+    }
 
 protected:
     /// Get the result type by argument type. If the function does not apply to these arguments, throw an exception.
@@ -216,6 +227,11 @@ protected:
     virtual bool useDefaultImplementationForNulls() const { return true; }
 
     virtual FunctionBasePtr buildImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & return_type) const = 0;
+
+    virtual void getLambdaArgumentTypesImpl(DataTypes & /*arguments*/) const
+    {
+        throw Exception("Function " + getName() + " can't have lambda-expressions as arguments", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+    }
 };
 
 
@@ -331,6 +347,8 @@ protected:
             data_types[i] = arguments[i].type;
         return std::make_shared<DefaultFunction>(function, data_types, return_type);
     }
+
+    void getLambdaArgumentTypesImpl(DataTypes & arguments) const override { return function->getLambdaArgumentTypesImpl(arguments); }
 
 private:
     std::shared_ptr<IFunction> function;
