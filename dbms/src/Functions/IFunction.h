@@ -250,6 +250,7 @@ public:
 
     using PreparedFunctionImpl::execute;
     using FunctionBuilderImpl::getReturnTypeImpl;
+    using FunctionBuilderImpl::getLambdaArgumentTypesImpl;
 
     PreparedFunctionPtr prepare(const Block & /*sample_block*/) const final
     {
