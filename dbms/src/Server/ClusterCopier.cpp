@@ -851,10 +851,36 @@ protected:
         }
     }
 
-    std::shared_ptr<ASTCreateQuery> rewriteCreateQueryStorage(const ASTPtr & create_query_pull, const DatabaseAndTableName & new_table,
-                                     const ASTPtr & new_storage_ast)
+    static ASTPtr removeAliasColumnsFromCreateQuery(const ASTPtr & query_ast)
     {
-        auto & create = typeid_cast<ASTCreateQuery &>(*create_query_pull);
+        const ASTs & column_asts = typeid_cast<ASTCreateQuery &>(*query_ast).columns->children;
+        auto new_columns = std::make_shared<ASTExpressionList>();
+
+        for (const ASTPtr & column_ast : column_asts)
+        {
+            const ASTColumnDeclaration & column = typeid_cast<const ASTColumnDeclaration &>(*column_ast);
+
+            if (!column.default_specifier.empty())
+            {
+                ColumnDefaultType type = columnDefaultTypeFromString(column.default_specifier);
+                if (type == ColumnDefaultType::Materialized || type == ColumnDefaultType::Alias)
+                    continue;
+            }
+
+            new_columns->children.emplace_back(column_ast->clone());
+        }
+
+        ASTPtr new_query_ast = query_ast->clone();
+        ASTCreateQuery & new_query = typeid_cast<ASTCreateQuery &>(*new_query_ast);
+        new_query.columns = new_columns.get();
+        new_query.children.at(0) = std::move(new_columns);
+
+        return new_query_ast;
+    }
+
+    std::shared_ptr<ASTCreateQuery> rewriteCreateQueryStorage(const ASTPtr & create_query_ast, const DatabaseAndTableName & new_table, const ASTPtr & new_storage_ast)
+    {
+        ASTCreateQuery & create = typeid_cast<ASTCreateQuery &>(*create_query_ast);
         auto res = std::make_shared<ASTCreateQuery>(create);
 
         if (create.storage == nullptr || new_storage_ast == nullptr)
@@ -927,7 +953,7 @@ protected:
 
         LOG_DEBUG(log, "Execute distributed DROP PARTITION: " << query);
         /// Limit number of max executing replicas to 1
-        size_t num_shards = executeQueryOnCluster(cluster_push, query, nullptr, &settings_push, PoolMode::GET_ALL, 1);
+        size_t num_shards = executeQueryOnCluster(cluster_push, query, nullptr, &settings_push, PoolMode::GET_ONE, 1);
 
         if (num_shards < cluster_push->getShardCount())
         {
@@ -1080,8 +1106,9 @@ protected:
             auto storage_shard_ast = createASTStorageDistributed(shard_read_cluster_name, task_table.table_pull.first, task_table.table_pull.second);
             const auto & storage_split_ast = task_table.engine_split_ast;
 
-            auto create_table_pull_ast = rewriteCreateQueryStorage(create_query_pull_ast, table_shard, storage_shard_ast);
-            auto create_table_split_ast = rewriteCreateQueryStorage(create_query_pull_ast, table_split, storage_split_ast);
+            auto create_query_ast = removeAliasColumnsFromCreateQuery(create_query_pull_ast);
+            auto create_table_pull_ast = rewriteCreateQueryStorage(create_query_ast, table_shard, storage_shard_ast);
+            auto create_table_split_ast = rewriteCreateQueryStorage(create_query_ast, table_split, storage_split_ast);
 
             //LOG_DEBUG(log, "Create shard reading table. Query: " << queryToString(create_table_pull_ast));
             dropAndCreateLocalTable(create_table_pull_ast);
@@ -1152,7 +1179,7 @@ protected:
             String query = queryToString(create_query_push_ast);
 
             LOG_DEBUG(log, "Create remote push tables. Query: " << query);
-            executeQueryOnCluster(task_table.cluster_push, query, create_query_push_ast, &task_cluster->settings_push);
+            executeQueryOnCluster(task_table.cluster_push, query, create_query_push_ast, &task_cluster->settings_push, PoolMode::GET_MANY);
         }
 
         /// Do the copying
@@ -1381,8 +1408,12 @@ protected:
                 return max_successful_executions_per_shard && num_successful_executions >= max_successful_executions_per_shard;
             };
 
+            size_t num_replicas = cluster->getShardsAddresses().at(shard_index).size();
+            size_t num_local_replicas = shard.getLocalNodeCount();
+            size_t num_remote_replicas = num_replicas - num_local_replicas;
+
             /// In that case we don't have local replicas, but do it just in case
-            for (size_t i = 0; i < shard.getLocalNodeCount(); ++i)
+            for (size_t i = 0; i < num_local_replicas; ++i)
             {
                 auto interpreter = InterpreterFactory::get(query_ast, context);
                 interpreter->execute();
@@ -1394,7 +1425,10 @@ protected:
             /// Will try to make as many as possible queries
             if (shard.hasRemoteConnections())
             {
-                std::vector<IConnectionPool::Entry> connections = shard.pool->getMany(settings, pool_mode);
+                Settings current_settings = *settings;
+                current_settings.max_parallel_replicas = num_remote_replicas ? num_remote_replicas : 1;
+
+                std::vector<IConnectionPool::Entry> connections = shard.pool->getMany(&current_settings, pool_mode);
 
                 for (auto & connection : connections)
                 {
@@ -1402,7 +1436,7 @@ protected:
                     {
                         try
                         {
-                            RemoteBlockInputStream stream(*connection, query, context, settings);
+                            RemoteBlockInputStream stream(*connection, query, context, &current_settings);
                             NullBlockOutputStream output;
                             copyData(stream, output);
 
